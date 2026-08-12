@@ -4,15 +4,11 @@ import numpy as np
 import joblib
 import requests 
 
-# ==========================================
 # 1. CONFIGURAREA PAGINII
-# ==========================================
 st.set_page_config(page_title="F1 Teammate Predictor", page_icon="🏎️", layout="wide")
 st.title("🏎️ F1 Teammate Battle Predictor")
 
-# ==========================================
-# 2. ÎNCĂRCAREA MODELELOR ȘI A DATELOR
-# ==========================================
+# 2. INCARCAREA MODELELOR SI A DATELOR
 @st.cache_resource
 def load_assets():
     model = joblib.load('best_f1_model.pkl')
@@ -23,7 +19,7 @@ def load_assets():
 
 model, scaler, imputer, df = load_assets()
 
-# Lista de features exact în ordinea antrenării
+# lista de features
 FEATURES = [
     'grid', 'grid_advantage', 'age_advantage', 'quali_advantage', 'quali_time_advantage', 'champ_pts_advantage', 
     'champ_pos_advantage', 'wins_advantage', 'team_position', 'pit_stop_advantage', 'pit_time_advantage',
@@ -32,25 +28,20 @@ FEATURES = [
     'recent_form_advantage', 'circuit_form_advantage'
 ]
 
-# ==========================================
-# 3. INTERFAȚA CU TAB-URI
-# ==========================================
+# 3. INTERFATA CU TAB-URI
 tab_live, tab_istoric = st.tabs(["🔴 Cursa Live (Următoarea)", "📚 Istoric Curse"])
 
-# ==========================================
 # TAB-UL 1: CURSA LIVE
-# ==========================================
 with tab_live:
     st.header("Predictii Live pentru Weekendul Curent")
     
-    # Folosim session_state pentru a nu pierde datele când interacționăm cu meniul selectbox
     if 'live_data_fetched' not in st.session_state:
         st.session_state.live_data_fetched = False
 
     if st.button("Verifică statusul cursei următoare"):
         with st.spinner("Conectare la serverele F1..."):
             try:
-                # API Call pt următoarea cursă
+                # API Call pt următoarea cursa
                 url_next = "http://api.jolpi.ca/ergast/f1/current/next.json"
                 resp_next = requests.get(url_next).json()
                 
@@ -59,7 +50,7 @@ with tab_live:
                 st.session_state.race_name = race_data['raceName']
                 st.session_state.season = race_data['season']
                 
-                # API Call pt calificări
+                # API Call pt calificari
                 url_quali = f"http://api.jolpi.ca/ergast/f1/{st.session_state.season}/{st.session_state.round_no}/qualifying.json"
                 resp_quali = requests.get(url_quali).json()
                 
@@ -71,13 +62,13 @@ with tab_live:
                     st.session_state.quali_ready = True
                     st.session_state.quali_data = quali_results[0]['QualifyingResults']
                 
-                # Salvăm faptul că am extras datele cu succes
+                # Salvam faptul că am extras datele cu succes
                 st.session_state.live_data_fetched = True
                 
             except Exception as e:
                 st.error(f"Eroare la preluarea datelor: {e}")
 
-    # Dacă datele au fost preluate (chiar dacă pagina s-a reîncărcat), afișăm interfața
+    # Daca datele au fost preluate (chiar daca pagina s-a reincarcat), afisam interfata
     if st.session_state.live_data_fetched:
         st.subheader(f"🏆 Următoarea cursă: {st.session_state.race_name} ({st.session_state.season}) - Runda {st.session_state.round_no}")
         
@@ -160,67 +151,140 @@ with tab_live:
                     if selected_live_team != "Toate echipele":
                         st.warning(f"{current_team} nu are 2 piloți care au participat la calificări.")
 
-# ==========================================
 # TAB-UL 2: ISTORIC CURSE
-# ==========================================
 with tab_istoric:
     st.header("Analizează curse din trecut")
     
-    col1, col2, col3 = st.columns(3)
-    years = sorted(df['year'].unique(), reverse=True)
-    selected_year = col1.selectbox("Alege Anul", years)
-
-    races = df[df['year'] == selected_year]['race_name'].unique()
-    selected_race = col2.selectbox("Alege Cursa", races)
-
-    teams = df[(df['year'] == selected_year) & (df['race_name'] == selected_race)]['team_name'].unique()
-    selected_team = col3.selectbox("Alege Echipa", teams)
+    current_year = pd.Timestamp.now().year
+    years = sorted(list(set(df['year'].unique()) | {current_year}), reverse=True)
     
-    if st.button("Generează Predicție", key="btn_istoric"):
-        matchup = df[(df['year'] == selected_year) & 
-                     (df['race_name'] == selected_race) & 
-                     (df['team_name'] == selected_team)].copy()
+    col1, col2, col3 = st.columns(3)
+    selected_year = col1.selectbox("Alege Anul", years)
+    
+    @st.cache_data(ttl=3600)
+    def get_completed_races(year):
+        try:
+            url = f"http://api.jolpi.ca/ergast/f1/{year}/results/1.json"
+            resp = requests.get(url).json()
+            races = resp['MRData']['RaceTable']['Races']
+            return {r['raceName']: r['round'] for r in races}
+        except Exception:
+            return {}
+
+    completed_races = get_completed_races(selected_year)
+    
+    if not completed_races:
+        st.warning(f"Nu s-au putut prelua cursele pentru anul {selected_year} sau nu există curse finalizate încă.")
+    else:
+        race_names = list(completed_races.keys())
+        selected_race = col2.selectbox("Alege Cursa", race_names)
+        round_no = completed_races[selected_race]
         
-        if len(matchup) == 2:
-            features_data = matchup[FEATURES].copy()
-            features_data = imputer.transform(features_data)
-            features_data = scaler.transform(features_data)
-            features_data = np.nan_to_num(features_data, nan=0.0)
-            
-            prob_castig = model.predict_proba(features_data)[:, 1]
-            
-            pilot_1 = matchup.iloc[0]
-            pilot_2 = matchup.iloc[1]
-            prob_1 = prob_castig[0]
-            prob_2 = prob_castig[1]
-            
-            st.markdown("---")
-            st.subheader(f"Rezultat: {selected_team} ({selected_year} - {selected_race})")
-            
-            colA, colB, colC = st.columns(3)
-            
-            with colA:
-                st.metric(label=pilot_1['driverRef'].capitalize(), 
-                          value=f"{prob_1:.1%}",
-                          delta=f"Loc cursă: P{int(pilot_1['positionOrder'])}", delta_color="off")
-                
-                if prob_1 > prob_2:
-                    st.success("FAVORIT PREZIS")
-                if pilot_1['beat_teammate'] == 1:
-                    st.info("A CÂȘTIGAT ÎN REALITATE")
-            
-            with colB:
-                st.markdown("<h3 style='text-align: center; margin-top: 15px;'>VS</h3>", unsafe_allow_html=True)
-                
-            with colC:
-                st.metric(label=pilot_2['driverRef'].capitalize(), 
-                          value=f"{prob_2:.1%}",
-                          delta=f"Loc cursă: P{int(pilot_2['positionOrder'])}", delta_color="off")
-                
-                if prob_2 > prob_1:
-                    st.success("FAVORIT PREZIS")
-                if pilot_2['beat_teammate'] == 1:
-                    st.info("A CÂȘTIGAT ÎN REALITATE")
-                    
+        @st.cache_data(ttl=3600)
+        def get_race_results(year, round_no):
+            try:
+                url = f"http://api.jolpi.ca/ergast/f1/{year}/{round_no}/results.json"
+                resp = requests.get(url).json()
+                return resp['MRData']['RaceTable']['Races'][0]['Results']
+            except Exception:
+                return []
+
+        race_results = get_race_results(selected_year, round_no)
+        
+        if not race_results:
+            st.warning("Nu s-au putut prelua rezultatele pentru această cursă.")
         else:
-            st.warning("Date insuficiente pentru această echipă în cursa selectată (este posibil ca unul dintre piloți să fi avut DNF înainte de start).")
+            df_results = pd.json_normalize(race_results)
+            
+            teams = df_results['Constructor.name'].unique()
+            team_options = ["Toate echipele"] + list(teams)
+            selected_team = col3.selectbox("Alege Echipa", team_options)
+            
+            if st.button("Generează Predicție", key="btn_istoric"):
+                st.markdown(f"### Rezultate: {selected_race} ({selected_year})")
+                
+                teams_to_process = teams if selected_team == "Toate echipele" else [selected_team]
+                
+                for current_team in teams_to_process:
+                    matchup_csv = df[(df['year'] == selected_year) & 
+                                     (df['race_name'] == selected_race) & 
+                                     (df['team_name'] == current_team)].copy()
+                    
+                    team_data_api = df_results[df_results['Constructor.name'] == current_team]
+                    
+                    if len(team_data_api) >= 2:
+                        pilot_1_api = team_data_api.iloc[0]
+                        pilot_2_api = team_data_api.iloc[1]
+                        
+                        p1_name = f"{pilot_1_api['Driver.givenName']} {pilot_1_api['Driver.familyName']}"
+                        p2_name = f"{pilot_2_api['Driver.givenName']} {pilot_2_api['Driver.familyName']}"
+                        
+                        p1_pos = int(pilot_1_api.get('positionOrder', 99))
+                        p2_pos = int(pilot_2_api.get('positionOrder', 99))
+                        
+                        p1_won_real = p1_pos < p2_pos
+                        p2_won_real = p2_pos < p1_pos
+                        
+                        prob_1, prob_2 = 0.5, 0.5
+                        
+                        if len(matchup_csv) == 2:
+                            features_data = matchup_csv[FEATURES].copy()
+                            features_data = imputer.transform(features_data)
+                            features_data = scaler.transform(features_data)
+                            features_data = np.nan_to_num(features_data, nan=0.0)
+                            
+                            probs = model.predict_proba(features_data)[:, 1]
+                            
+                            p1_csv_ref = matchup_csv.iloc[0]['driverRef'].lower()
+                            if p1_csv_ref in pilot_1_api['Driver.driverId'].lower():
+                                prob_1, prob_2 = probs[0], probs[1]
+                            else:
+                                prob_1, prob_2 = probs[1], probs[0]
+                                
+                        else:
+                            p1_ref = pilot_1_api['Driver.driverId'].lower()
+                            p2_ref = pilot_2_api['Driver.driverId'].lower()
+                            
+                            p1_grid = int(pilot_1_api.get('grid', 0))
+                            p2_grid = int(pilot_2_api.get('grid', 0))
+                            
+                            p1_history = df[df['driverRef'].str.contains(p1_ref, case=False, na=False)].sort_values('race_date', ascending=False).head(1)
+                            
+                            if not p1_history.empty:
+                                p1_features = p1_history[FEATURES].copy()
+                                p1_features['grid'] = p1_grid
+                                p1_features['grid_advantage'] = p2_grid - p1_grid
+                                p1_features['quali_advantage'] = p2_grid - p1_grid
+                                
+                                p1_feat_scaled = scaler.transform(imputer.transform(p1_features))
+                                prob_1 = model.predict_proba(np.nan_to_num(p1_feat_scaled, nan=0.0))[0][1]
+                                prob_2 = 1 - prob_1
+                        
+                        st.markdown("---")
+                        st.subheader(f"{current_team}")
+                        
+                        colA, colB, colC = st.columns(3)
+                        
+                        with colA:
+                            st.metric(label=p1_name, 
+                                      value=f"{prob_1:.1%}",
+                                      delta=f"Loc cursă: P{p1_pos}", delta_color="off")
+                            if prob_1 > prob_2:
+                                st.success("FAVORIT PREZIS")
+                            if p1_won_real:
+                                st.info("🏆 A CÂȘTIGAT ÎN REALITATE")
+                        
+                        with colB:
+                            st.markdown("<h3 style='text-align: center; margin-top: 15px;'>VS</h3>", unsafe_allow_html=True)
+                            
+                        with colC:
+                            st.metric(label=p2_name, 
+                                      value=f"{prob_2:.1%}",
+                                      delta=f"Loc cursă: P{p2_pos}", delta_color="off")
+                            if prob_2 > prob_1:
+                                st.success("FAVORIT PREZIS")
+                            if p2_won_real:
+                                st.info("🏆 A CÂȘTIGAT ÎN REALITATE")
+                    else:
+                        if selected_team != "Toate echipele":
+                            st.warning(f"Echipa {current_team} nu are 2 piloți clasați în această cursă.")
