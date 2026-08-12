@@ -219,8 +219,8 @@ with tab_istoric:
                         p1_name = f"{pilot_1_api['Driver.givenName']} {pilot_1_api['Driver.familyName']}"
                         p2_name = f"{pilot_2_api['Driver.givenName']} {pilot_2_api['Driver.familyName']}"
                         
-                        p1_pos = int(pilot_1_api.get('positionOrder', 99))
-                        p2_pos = int(pilot_2_api.get('positionOrder', 99))
+                        p1_pos = int(pilot_1_api.get('position', 99))
+                        p2_pos = int(pilot_2_api.get('position', 99))
                         
                         p1_won_real = p1_pos < p2_pos
                         p2_won_real = p2_pos < p1_pos
